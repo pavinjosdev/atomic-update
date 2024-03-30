@@ -31,7 +31,7 @@ import xml.etree.ElementTree as ET
 VERSION = "0.1.0"
 ZYPPER_PID_FILE = "/run/zypp.pid"
 VALID_CMD = ["dup", "run", "rollback"]
-VALID_OPT = ["--reboot", "--apply", "--shell", "--continue", "--debug", "--help", "--version", "--no-confirm"]
+VALID_OPT = ["--reboot", "--apply", "--shell", "--continue", "--no-verify", "--interactive", "--debug", "--help", "--version"]
 
 # Command help/usage info
 help_text = """
@@ -50,11 +50,11 @@ Options:
   --apply               - Switch into default snapshot without reboot
   --shell               - Open shell in new snapshot before exiting
   --continue [number]   - Use latest or given snapshot as base
-  --no-verify           - Skip verification of new snapshot
+  --no-verify           - Skip verification of snapshot
+  --interactive         - Run dup in interactive mode
   --debug               - Enable debug output
   --help                - Print this help and exit
   --version             - Print version number and exit
-  --no-confirm          - Automatic yes to prompts, run non-interactively
 """
 
 ################################
@@ -181,7 +181,7 @@ for opt in OPT:
         sys.exit(1)
 
 DEBUG = True if "--debug" in OPT else False
-NO_CONFIRM = True if "--no-confirm" in OPT else False
+CONFIRM = True if "--interactive" in OPT else False
 REBOOT = True if "--reboot" in OPT else False
 APPLY = True if "--apply" in OPT else False
 SHELL = True if "--shell" in OPT else False
@@ -194,6 +194,27 @@ logging.basicConfig(
     format="%(asctime)s: %(levelname)s: %(message)s",
     level=logging.DEBUG if DEBUG else logging.INFO,
 )
+
+# check if there's a snapshot number provided to continue from
+continue_num = None
+if "--continue" in OPT:
+    try:
+        continue_num = int(sys.argv[sys.argv.index("--continue") + 1])
+        if not continue_num in range(1, 999999):
+            logging.error("Invalid value for option '--continue'. Must be between 1 to 999999 (inclusive)")
+            sys.exit(1)
+    except ValueError:
+        logging.debug("No numerical value provided for option '--continue'")
+        pass
+    except IndexError:
+        logging.debug("No value provided for option '--continue'")
+        pass
+
+if continue_num:
+    ret = os.system(f"btrfs subvolume list / | grep '@/.snapshots/{continue_num}/snapshot'")
+    if ret != 0:
+        logging.error(f"Provided snapshot {continue_num} for option '--continue' does not exist")
+        sys.exit(1)
 
 # Bail out if we're not root
 if os.getuid() != 0:
@@ -245,6 +266,10 @@ if COMMAND == "dup":
     # get active and default snapshot number
     active_snap, default_snap = get_snaps(snapper_root_config)
     logging.debug(f"Active snapshot number: {active_snap}, Default snapshot number: {default_snap}")
+    if CONTINUE:
+        active_snap = default_snap
+        if continue_num:
+            active_snap = continue_num
     # create new read-write snapshot to perform dup in
     out, ret = shell_exec(f"snapper -c {snapper_root_config} create -c number " \
                           f"-d 'Atomic update of #{active_snap}' " \
@@ -255,6 +280,7 @@ if COMMAND == "dup":
     # get latest atomic snapshot
     atomic_snap = get_atomic_snap(snapper_root_config)
     logging.debug(f"Latest atomic snapshot number: {atomic_snap}")
+    logging.info(f"Using snapshot {active_snap} as base for new snapshot {atomic_snap}")
     snap_subvol = f"@/.snapshots/{atomic_snap}/snapshot"
     snap_dir = snap_subvol.lstrip("@")
     # check the latest atomic snapshot exists
@@ -289,18 +315,50 @@ chroot {TMP_DIR} mount -a;
         cleanup()
         sys.exit()
     logging.info("Performing atomic distribution upgrade...")
-    ret = os.system(f"zypper --root {TMP_DIR} {'--non-interactive' if NO_CONFIRM else ''} --no-cd dist-upgrade")
+    ret = os.system(f"zypper --root {TMP_DIR} {'' if CONFIRM else '--non-interactive'} --no-cd dist-upgrade")
     if ret != 0:
         logging.error(f"Zypper returned exit code {ret}. Discarding snapshot {atomic_snap}")
         shell_exec(f"snapper -c {snapper_root_config} delete {atomic_snap}")
         cleanup()
         sys.exit(9)
     logging.info(f"Distribution upgrade completed successfully")
+    if SHELL:
+        logging.info(f"Opening chroot in snapshot {atomic_snap}")
+        logging.info("Continue with 'exit' or discard with 'exit 1'")
+        ret = os.system(f"chroot {snap_dir} env PS1='atomic-update:${{PWD}} # ' bash --noprofile --norc")
+        if ret != 0:
+            logging.error(f"Shell returned exit code {ret}. Discarding snapshot {atomic_snap}")
+            shell_exec(f"snapper -c {snapper_root_config} delete {atomic_snap}")
+            cleanup()
+            sys.exit()
     logging.info(f"Setting snapshot {atomic_snap} ({snap_dir}) as the new default")
     shell_exec(f"snapper -c {snapper_root_config} modify --default {atomic_snap}")
     # perform cleanup
     cleanup()
     if REBOOT:
+        logging.info("Rebooting now...")
         os.system("systemctl reboot")
     if APPLY:
-        pass
+        logging.info(f"Using default snapshot {atomic_snap} to replace running system...")
+        logging.info("Applying /usr...")
+        os.system(f"mount -o bind {snap_dir}/usr /usr")
+        # find subvols under /usr and mount them
+        out, ret = shell_exec("LC_ALL=C btrfs subvolume list / | grep -v snapshots | grep '@/usr' | awk '{print $9}'")
+        for subvol in out.split("\n"):
+            subvol = subvol.lstrip("@")
+            os.system(f"mount -o bind {snap_dir}{subvol} {subvol}")
+        logging.info("Applying /etc...")
+        os.system(f"mount -o bind {snap_dir}/etc /etc")
+        logging.info("Applying /boot...")
+        os.system(f"mount -o bind {snap_dir}/boot /boot")
+        # find subvols under /boot and mount them
+        out, ret = shell_exec("LC_ALL=C btrfs subvolume list / | grep -v snapshots | grep '@/boot' | awk '{print $9}'")
+        for subvol in out.split("\n"):
+            subvol = subvol.lstrip("@")
+            os.system(f"mount -o bind {snap_dir}{subvol} {subvol}")
+        logging.info("Executing systemctl daemon-reexec...")
+        os.system("systemctl daemon-reexec")
+        logging.info("Executing systemd-tmpfiles --create...")
+        os.system("systemd-tmpfiles --create")
+        logging.info("Applied default snapshot as new base for running system!")
+        logging.info("Running processes will not be restarted automatically.")
