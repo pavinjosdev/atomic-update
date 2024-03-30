@@ -153,7 +153,11 @@ if "--version" in OPT:
     print(f"atomic-update v{VERSION}")
     sys.exit()
 
-# Validate command args
+# Validate command
+if not COMMAND:
+    print(f"No valid command provided. See usage below.\n")
+    print(help_text.strip())
+    sys.exit(1)
 if COMMAND == "run" and not ARG:
     print(f"No argument provided for command {COMMAND!r}. See usage below.\n")
     print(help_text.strip())
@@ -341,7 +345,7 @@ chroot {TMP_DIR} mount -a;
             sys.exit(9)
         logging.info("Command run successfully")
     if SHELL:
-        logging.info(f"Opening bash shell within snapshot {atomic_snap} chroot")
+        logging.info(f"Opening bash shell within chroot of snapshot {atomic_snap}")
         logging.info("Continue with 'exit' or discard with 'exit 1'")
         ret = os.system(f"chroot {snap_dir} env PS1='atomic-update:${{PWD}} # ' bash --noprofile --norc")
         if ret != 0:
