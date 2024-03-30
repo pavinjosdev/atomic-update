@@ -216,6 +216,27 @@ if continue_num:
         logging.error(f"Provided snapshot {continue_num} for option '--continue' does not exist")
         sys.exit(1)
 
+# check if there's a snapshot number provided for rollback
+rollback_num = None
+if COMMAND == "rollback":
+    try:
+        rollback_num = int(ARG[0])
+        if not rollback_num in range(1, 999999):
+            logging.error("Invalid snapshot number provided for rollback. Must be between 1 to 999999 (inclusive)")
+            sys.exit(1)
+    except ValueError:
+        logging.debug("Invalid value provided as snapshot number for rollback")
+        sys.exit(1)
+    except IndexError:
+        logging.debug("No snapshot number provided for rollback")
+        pass
+
+if rollback_num:
+    ret = os.system(f"btrfs subvolume list / | grep '@/.snapshots/{rollback_num}/snapshot'")
+    if ret != 0:
+        logging.error(f"Provided snapshot {rollback_num} for rollback does not exist")
+        sys.exit(1)
+
 # Bail out if we're not root
 if os.getuid() != 0:
     logging.error("Bailing out, program must be run with root privileges")
@@ -254,9 +275,9 @@ if os.path.isfile(ZYPPER_PID_FILE):
 # Create secure temp dir
 TMP_DIR = tempfile.mkdtemp(dir="/tmp", prefix="atomic-update_")
 
-# Handle command: dup
-if COMMAND == "dup":
-    logging.info("Starting atomic distribution upgrade...")
+# Handle commands: dup, run
+if COMMAND in ["dup", "run"]:
+    logging.info(f"Starting atomic {'distribution upgrade' if COMMAND == 'dup' else 'transaction'}...")
     # get snapper root config name
     snapper_root_config = get_snapper_root_config()
     logging.debug(f"Snapper root config name: {snapper_root_config}")
@@ -270,20 +291,20 @@ if COMMAND == "dup":
         active_snap = default_snap
         if continue_num:
             active_snap = continue_num
-    # create new read-write snapshot to perform dup in
+    # create new read-write snapshot to perform atomic update in
     out, ret = shell_exec(f"snapper -c {snapper_root_config} create -c number " \
                           f"-d 'Atomic update of #{active_snap}' " \
                           f"-u 'atomic=yes' --from {active_snap} --read-write")
     if ret != 0:
-        logging.error(f"Could not create read-write snapshot to perform dup in")
+        logging.error(f"Could not create read-write snapshot to perform atomic update in")
         sys.exit(6)
-    # get latest atomic snapshot
+    # get latest atomic snapshot number we just created
     atomic_snap = get_atomic_snap(snapper_root_config)
     logging.debug(f"Latest atomic snapshot number: {atomic_snap}")
     logging.info(f"Using snapshot {active_snap} as base for new snapshot {atomic_snap}")
     snap_subvol = f"@/.snapshots/{atomic_snap}/snapshot"
     snap_dir = snap_subvol.lstrip("@")
-    # check the latest atomic snapshot exists
+    # check the latest atomic snapshot exists as btrfs subvolume
     out, ret = shell_exec(f"LC_ALL=C btrfs subvolume list / | grep '{snap_subvol}'")
     if ret != 0:
         logging.error(f"Could not find latest atomic snapshot subvolume {snap_subvol}. Discarding snapshot {atomic_snap}")
@@ -292,7 +313,7 @@ if COMMAND == "dup":
     # find the device where root fs resides
     rootfs_device, ret = shell_exec("LC_ALL=C mount -l | grep 'on / type btrfs' | awk '{print $1}'")
     if ret != 0:
-        logging.error("Could not find root filesystem device from mountpoints. Discarding snapshot {atomic_snap}")
+        logging.error(f"Could not find root filesystem device from mountpoints. Discarding snapshot {atomic_snap}")
         shell_exec(f"snapper -c {snapper_root_config} delete {atomic_snap}")
         sys.exit(8)
     logging.debug(f"Btrfs root FS device: {rootfs_device}")
@@ -304,24 +325,35 @@ for i in dev proc run sys; do mount --rbind --make-rslave /$i {TMP_DIR}/$i; done
 chroot {TMP_DIR} mount -a;
 """
     shell_exec(commands)
-    # check if dup has anything to do
-    logging.info("Checking for packages to upgrade")
-    xml_output, ret = shell_exec(f"LC_ALL=C zypper --root {TMP_DIR} --non-interactive --no-cd --xmlout dist-upgrade --dry-run")
-    docroot = ET.fromstring(xml_output)
-    for item in docroot.iter('install-summary'):
-        num_pkgs = int(item.attrib["packages-to-change"])
-    if not num_pkgs:
-        logging.info("Nothing to do. Exiting...")
-        cleanup()
-        sys.exit()
-    logging.info("Performing atomic distribution upgrade...")
-    ret = os.system(f"zypper --root {TMP_DIR} {'' if CONFIRM else '--non-interactive'} --no-cd dist-upgrade")
-    if ret != 0:
-        logging.error(f"Zypper returned exit code {ret}. Discarding snapshot {atomic_snap}")
-        shell_exec(f"snapper -c {snapper_root_config} delete {atomic_snap}")
-        cleanup()
-        sys.exit(9)
-    logging.info(f"Distribution upgrade completed successfully")
+    if COMMAND == "dup":
+        # check if dup has anything to do
+        logging.info("Checking for packages to upgrade")
+        xml_output, ret = shell_exec(f"LC_ALL=C zypper --root {TMP_DIR} --non-interactive --no-cd --xmlout dist-upgrade --dry-run")
+        docroot = ET.fromstring(xml_output)
+        for item in docroot.iter('install-summary'):
+            num_pkgs = int(item.attrib["packages-to-change"])
+        if not num_pkgs:
+            logging.info("Nothing to do. Exiting...")
+            cleanup()
+            sys.exit()
+        logging.info("Performing distribution upgrade within chroot...")
+        ret = os.system(f"zypper --root {TMP_DIR} {'' if CONFIRM else '--non-interactive'} --no-cd dist-upgrade")
+        if ret != 0:
+            logging.error(f"Zypper returned exit code {ret}. Discarding snapshot {atomic_snap}")
+            shell_exec(f"snapper -c {snapper_root_config} delete {atomic_snap}")
+            cleanup()
+            sys.exit(9)
+        logging.info(f"Distribution upgrade completed successfully")
+    elif COMMAND == "run":
+        exec_cmd = ' '.join(ARG)
+        logging.info(f"Running command {exec_cmd!r} within chroot...")
+        ret = os.system(f"chroot {snap_dir} {exec_cmd}")
+        if ret != 0:
+            logging.error(f"Command returned exit code {ret}. Discarding snapshot {atomic_snap}")
+            shell_exec(f"snapper -c {snapper_root_config} delete {atomic_snap}")
+            cleanup()
+            sys.exit()
+        logging.info("Command run successfully")
     if SHELL:
         logging.info(f"Opening chroot in snapshot {atomic_snap}")
         logging.info("Continue with 'exit' or discard with 'exit 1'")
@@ -338,6 +370,7 @@ chroot {TMP_DIR} mount -a;
     if REBOOT:
         logging.info("Rebooting now...")
         os.system("systemctl reboot")
+        sys.exit()
     if APPLY:
         logging.info(f"Using default snapshot {atomic_snap} to replace running system...")
         logging.info("Applying /usr...")
@@ -360,5 +393,20 @@ chroot {TMP_DIR} mount -a;
         os.system("systemctl daemon-reexec")
         logging.info("Executing systemd-tmpfiles --create...")
         os.system("systemd-tmpfiles --create")
-        logging.info("Applied default snapshot as new base for running system!")
-        logging.info("Running processes will not be restarted automatically.")
+        logging.info("Applied default snapshot as new base for running system")
+        logging.info("Running processes will not be restarted automatically")
+        sys.exit()
+
+# Handle command: rollback
+elif COMMAND == "rollback":
+    warn_opts = ["--apply", "--reboot"]
+    if warn_opts in OPT:
+        logging.warn(f"Options {', '.join(warn_opts)!r} do not apply to rollback command")
+    if rollback_num:
+        os.system(f"snapper rollback {rollback_num}")
+    else:
+        os.system("snapper rollback")
+
+# If we're here, remind user to reboot
+logging.info("Please reboot your machine to activate the changes and avoid data loss")
+sys.exit()
