@@ -100,13 +100,14 @@ def get_atomic_snap(snapper_root_config):
 def cleanup():
     logging.info("Cleaning up...")
     umount_command = f"""
-LC_ALL=C mount -l | grep '{TMP_DIR}' | awk '{{print $3}}' | awk '{{print length, $0}}' | sort -rn | awk '{{print $2}}' | awk '{{system("umount " $0)}}';
+LC_ALL=C mount -l | grep '{TMP_MOUNT_DIR}' | awk '{{print $3}}' | awk '{{print length, $0}}' | sort -rn | awk '{{print $2}}' | awk '{{system("umount " $0)}}';
 """
     while True:
         out, ret = shell_exec(umount_command)
         if out == "" and ret == 0:
             break
         time.sleep(0.01)
+    shell_exec(f"rmdir {quote(TMP_MOUNT_DIR)}")
     shell_exec(f"rmdir {quote(TMP_DIR)}")
 
 def sigint_handler(signum, frame):
@@ -257,6 +258,8 @@ if os.path.isfile(ZYPPER_PID_FILE):
 
 # Create secure temp dir
 TMP_DIR = tempfile.mkdtemp(dir="/tmp", prefix="atomic-update_")
+TMP_MOUNT_DIR = f"{TMP_DIR}/rootfs"
+os.makedirs(TMP_MOUNT_DIR, mode=0o700, exist_ok=True)
 
 # Handle commands: dup, run
 if COMMAND in ["dup", "run"]:
@@ -310,15 +313,15 @@ if COMMAND in ["dup", "run"]:
     # populate temp dir with atomic snapshot mounts
     logging.info("Setting up temp mounts...")
     commands = f"""
-mount -o subvol={snap_subvol} {rootfs_device} {TMP_DIR};
-for i in dev proc run sys; do mount --rbind --make-rslave /$i {TMP_DIR}/$i; done;
-chroot {TMP_DIR} mount -a;
+mount -o subvol={snap_subvol} {rootfs_device} {TMP_MOUNT_DIR};
+for i in dev proc run sys; do mount --rbind --make-rslave /$i {TMP_MOUNT_DIR}/$i; done;
+chroot {TMP_MOUNT_DIR} mount -a;
 """
     shell_exec(commands)
     if COMMAND == "dup":
         # check if dup has anything to do
         logging.info("Checking for packages to upgrade")
-        xml_output, ret = shell_exec(f"LC_ALL=C zypper --root {TMP_DIR} --non-interactive --no-cd --xmlout dist-upgrade --dry-run")
+        xml_output, ret = shell_exec(f"LC_ALL=C zypper --root {TMP_MOUNT_DIR} --non-interactive --no-cd --xmlout dist-upgrade --dry-run")
         docroot = ET.fromstring(xml_output)
         for item in docroot.iter('install-summary'):
             num_pkgs = int(item.attrib["packages-to-change"])
@@ -327,7 +330,7 @@ chroot {TMP_DIR} mount -a;
             cleanup()
             sys.exit()
         logging.info("Performing distribution upgrade within chroot...")
-        ret = os.system(f"zypper --root {TMP_DIR} {'' if CONFIRM else '--non-interactive'} --no-cd dist-upgrade")
+        ret = os.system(f"zypper --root {TMP_MOUNT_DIR} {'' if CONFIRM else '--non-interactive'} --no-cd dist-upgrade")
         if ret != 0:
             logging.error(f"Zypper returned exit code {ret}. Discarding snapshot {atomic_snap}")
             shell_exec(f"snapper -c {snapper_root_config} delete {atomic_snap}")
@@ -337,7 +340,7 @@ chroot {TMP_DIR} mount -a;
     elif COMMAND == "run":
         exec_cmd = ' '.join(ARG)
         logging.info(f"Running command {exec_cmd!r} within chroot...")
-        ret = os.system(f"chroot {snap_dir} {exec_cmd}")
+        ret = os.system(f"chroot {TMP_MOUNT_DIR} {exec_cmd}")
         if ret != 0:
             logging.error(f"Command returned exit code {ret}. Discarding snapshot {atomic_snap}")
             shell_exec(f"snapper -c {snapper_root_config} delete {atomic_snap}")
@@ -347,7 +350,7 @@ chroot {TMP_DIR} mount -a;
     if SHELL:
         logging.info(f"Opening bash shell within chroot of snapshot {atomic_snap}")
         logging.info("Continue with 'exit' or discard with 'exit 1'")
-        ret = os.system(f"chroot {snap_dir} env PS1='atomic-update:${{PWD}} # ' bash --noprofile --norc")
+        ret = os.system(f"chroot {TMP_MOUNT_DIR} env PS1='atomic-update:${{PWD}} # ' bash --noprofile --norc")
         if ret != 0:
             logging.error(f"Shell returned exit code {ret}. Discarding snapshot {atomic_snap}")
             shell_exec(f"snapper -c {snapper_root_config} delete {atomic_snap}")
