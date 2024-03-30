@@ -31,7 +31,8 @@ import xml.etree.ElementTree as ET
 VERSION = "0.1.0"
 ZYPPER_PID_FILE = "/run/zypp.pid"
 VALID_CMD = ["dup", "run", "rollback"]
-VALID_OPT = ["--reboot", "--apply", "--shell", "--continue", "--no-verify", "--interactive", "--debug", "--help", "--version"]
+VALID_OPT = ["--reboot", "--apply", "--shell", "--continue", "--no-verify", \
+            "--interactive", "--debug", "--help", "--version"]
 
 # Command help/usage info
 help_text = """
@@ -58,27 +59,6 @@ Options:
 """
 
 ################################
-
-# Function to query user for yes or no
-def query_yes_no(question, default=None):
-    valid = {"yes": True, "y": True, "ye": True, "no": False, "n": False}
-    if default is None:
-        prompt = " [y/n]: "
-    elif default == "yes":
-        prompt = " [Y/n]: "
-    elif default == "no":
-        prompt = " [y/N]: "
-    else:
-        raise ValueError(f"Invalid default answer: {default!r}")
-    while True:
-        sys.stdout.write(question + prompt)
-        choice = input().lower()
-        if default is not None and choice == "":
-            return valid[default]
-        elif choice in valid:
-            return valid[choice]
-        else:
-            sys.stdout.write("Please respond with 'yes' or 'no' (or 'y' or 'n').\n")
 
 # Function to get output and exit code of shell command
 def shell_exec(command):
@@ -287,10 +267,16 @@ if COMMAND in ["dup", "run"]:
     active_snap, default_snap = get_snaps(snapper_root_config)
     logging.debug(f"Active snapshot number: {active_snap}, Default snapshot number: {default_snap}")
     base_snap = active_snap
-    if CONTINUE:
+    if CONTINUE or APPLY:
         base_snap = default_snap
         if continue_num:
             base_snap = continue_num
+    # warn user when rebasing from old snapshot
+    # thus losing changes to snapshots made in the interim
+    if not continue_num and base_snap != default_snap:
+        logging.warn(f"This snapshot is being created from a different base ({base_snap}) " \
+                    f"than the previous default snapshot ({default_snap}) and does not " \
+                    f"contain the changes from the latter.")
     # create new read-write snapshot to perform atomic update in
     out, ret = shell_exec(f"snapper -c {snapper_root_config} create -c number " \
                           f"-d 'Atomic update of #{base_snap}' " \
@@ -409,12 +395,15 @@ chroot {TMP_DIR} mount -a;
 
 # Handle command: rollback
 elif COMMAND == "rollback":
-    warn_opts = ["--apply", "--reboot"]
-    if warn_opts in OPT:
-        logging.warn(f"Options {', '.join(warn_opts)!r} do not apply to rollback command")
+    invalid_opts = OPT.copy()
+    invalid_opts.remove("--debug")
+    if invalid_opts:
+        logging.warn(f"Options {', '.join(invalid_opts)!r} do not apply to rollback command")
     if rollback_num:
+        logging.info(f"Rolling back to snapshot {rollback_num}")
         os.system(f"snapper rollback {rollback_num}")
     else:
+        logging.info("Rolling back to currently booted snapshot")
         os.system("snapper rollback")
 
 # If we're here, remind user to reboot
