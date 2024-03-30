@@ -38,7 +38,7 @@ help_text = """
 Usage: atomic-update [options] command
 
 atomic-update provides safer transactional operations
-for systems with read-write root filesystem.
+for openSUSE systems with read-write root filesystems.
 
 Commands:
   dup                 - Perform distribution upgrade
@@ -146,12 +146,22 @@ ARG = []
 for index, item in enumerate(sys.argv):
     if index == 0:
         continue
-    if item in VALID_OPT:
-        OPT.append(item)
-    if item in VALID_CMD:
-        COMMAND = item
-        ARG = sys.argv[index+1:]
-        break
+    if item.startswith("--"):
+        if item in VALID_OPT:
+            OPT.append(item)
+        else:
+            print(f"Invalid option {item!r}. See usage below.\n")
+            print(help_text.strip())
+            sys.exit(1)
+    else:
+        if item in VALID_CMD:
+            COMMAND = item
+            ARG = sys.argv[index+1:]
+            break
+        else:
+            print(f"Invalid command {item!r}. See usage below.\n")
+            print(help_text.strip())
+            sys.exit(1)
 
 # Print help
 if "--help" in OPT:
@@ -163,22 +173,11 @@ if "--version" in OPT:
     print(f"atomic-update v{VERSION}")
     sys.exit()
 
-# Validate command
-if not COMMAND:
-    print("No valid command provided. See usage below.\n")
-    print(help_text.strip())
-    sys.exit(1)
+# Validate command args
 if COMMAND == "run" and not ARG:
     print(f"No argument provided for command {COMMAND!r}. See usage below.\n")
     print(help_text.strip())
     sys.exit(1)
-
-# Validate options
-for opt in OPT:
-    if opt not in VALID_OPT:
-        print(f"Invalid option {opt!r}. See usage below.\n")
-        print(help_text.strip())
-        sys.exit(1)
 
 DEBUG = True if "--debug" in OPT else False
 CONFIRM = True if "--interactive" in OPT else False
@@ -287,21 +286,22 @@ if COMMAND in ["dup", "run"]:
     # get active and default snapshot number
     active_snap, default_snap = get_snaps(snapper_root_config)
     logging.debug(f"Active snapshot number: {active_snap}, Default snapshot number: {default_snap}")
+    base_snap = active_snap
     if CONTINUE:
-        active_snap = default_snap
+        base_snap = default_snap
         if continue_num:
-            active_snap = continue_num
+            base_snap = continue_num
     # create new read-write snapshot to perform atomic update in
     out, ret = shell_exec(f"snapper -c {snapper_root_config} create -c number " \
-                          f"-d 'Atomic update of #{active_snap}' " \
-                          f"-u 'atomic=yes' --from {active_snap} --read-write")
+                          f"-d 'Atomic update of #{base_snap}' " \
+                          f"-u 'atomic=yes' --from {base_snap} --read-write")
     if ret != 0:
         logging.error(f"Could not create read-write snapshot to perform atomic update in")
         sys.exit(6)
     # get latest atomic snapshot number we just created
     atomic_snap = get_atomic_snap(snapper_root_config)
     logging.debug(f"Latest atomic snapshot number: {atomic_snap}")
-    logging.info(f"Using snapshot {active_snap} as base for new snapshot {atomic_snap}")
+    logging.info(f"Using snapshot {base_snap} as base for new snapshot {atomic_snap}")
     snap_subvol = f"@/.snapshots/{atomic_snap}/snapshot"
     snap_dir = snap_subvol.lstrip("@")
     # check the latest atomic snapshot exists as btrfs subvolume
@@ -352,10 +352,10 @@ chroot {TMP_DIR} mount -a;
             logging.error(f"Command returned exit code {ret}. Discarding snapshot {atomic_snap}")
             shell_exec(f"snapper -c {snapper_root_config} delete {atomic_snap}")
             cleanup()
-            sys.exit()
+            sys.exit(9)
         logging.info("Command run successfully")
     if SHELL:
-        logging.info(f"Opening chroot in snapshot {atomic_snap}")
+        logging.info(f"Opening bash shell within snapshot {atomic_snap} chroot")
         logging.info("Continue with 'exit' or discard with 'exit 1'")
         ret = os.system(f"chroot {snap_dir} env PS1='atomic-update:${{PWD}} # ' bash --noprofile --norc")
         if ret != 0:
@@ -374,21 +374,31 @@ chroot {TMP_DIR} mount -a;
     if APPLY:
         logging.info(f"Using default snapshot {atomic_snap} to replace running system...")
         logging.info("Applying /usr...")
-        os.system(f"mount -o bind {snap_dir}/usr /usr")
+        command = f"mount --bind --make-rslave {snap_dir}/usr /usr"
+        logging.debug(command)
+        os.system(command)
         # find subvols under /usr and mount them
         out, ret = shell_exec("LC_ALL=C btrfs subvolume list / | grep -v snapshots | grep '@/usr' | awk '{print $9}'")
         for subvol in out.split("\n"):
-            subvol = subvol.lstrip("@")
-            os.system(f"mount -o bind {snap_dir}{subvol} {subvol}")
+            subdir = subvol.lstrip("@")
+            command = f"mount -o subvol={subvol} {rootfs_device} {subdir}"
+            logging.debug(command)
+            os.system(command)
         logging.info("Applying /etc...")
-        os.system(f"mount -o bind {snap_dir}/etc /etc")
+        command = f"mount --bind --make-rslave {snap_dir}/etc /etc"
+        logging.debug(command)
+        os.system(command)
         logging.info("Applying /boot...")
-        os.system(f"mount -o bind {snap_dir}/boot /boot")
+        command = f"mount --bind --make-rslave {snap_dir}/boot /boot"
+        logging.debug(command)
+        os.system(command)
         # find subvols under /boot and mount them
         out, ret = shell_exec("LC_ALL=C btrfs subvolume list / | grep -v snapshots | grep '@/boot' | awk '{print $9}'")
         for subvol in out.split("\n"):
-            subvol = subvol.lstrip("@")
-            os.system(f"mount -o bind {snap_dir}{subvol} {subvol}")
+            subdir = subvol.lstrip("@")
+            command = f"mount -o subvol={subvol} {rootfs_device} {subdir}"
+            logging.debug(command)
+            os.system(command)
         logging.info("Executing systemctl daemon-reexec...")
         os.system("systemctl daemon-reexec")
         logging.info("Executing systemd-tmpfiles --create...")
