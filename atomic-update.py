@@ -304,12 +304,14 @@ if COMMAND in ["dup", "run"]:
         shell_exec(f"snapper -c {snapper_root_config} delete {atomic_snap}")
         sys.exit(7)
     # find the device where root fs resides
-    rootfs_device, ret = shell_exec("LC_ALL=C mount -l | grep 'on / type btrfs' | awk '{print $1}'")
+    out, ret = shell_exec("LC_ALL=C findmnt --json /")
     if ret != 0:
-        logging.error(f"Could not find root filesystem device from mountpoints. Discarding snapshot {atomic_snap}")
+        logging.error(f"Could not find root filesystem device. Discarding snapshot {atomic_snap}")
         shell_exec(f"snapper -c {snapper_root_config} delete {atomic_snap}")
         sys.exit(8)
-    logging.debug(f"Btrfs root FS device: {rootfs_device}")
+    out = json.loads(out)["filesystems"][0]
+    rootfs_device = out["source"].split("[")[0]
+    logging.debug(f"Btrfs root device: {rootfs_device}")
     # populate temp dir with atomic snapshot mounts
     logging.info("Setting up temp mounts...")
     commands = f"""
@@ -395,12 +397,20 @@ chroot {TMP_MOUNT_DIR} bash -c "export PS1='atomic-update:\${{PWD}} # '; exec ba
             command = f"mount -o subvol={subvol} {rootfs_device} {subdir}"
             logging.debug(command)
             os.system(command)
+        # mount ESP if it exists
+        out, ret = shell_exec("LC_ALL=C findmnt --json /boot/efi")
+        if ret == 0:
+            out = json.loads(out)["filesystems"][0]
+            command = f"mount {out['source']} {out['target']}"
+            logging.debug(command)
+            os.system(command)
         logging.info("Executing systemctl daemon-reexec...")
         os.system("systemctl daemon-reexec")
         logging.info("Executing systemd-tmpfiles --create...")
         os.system("systemd-tmpfiles --create")
         logging.info("Applied default snapshot as new base for running system")
         logging.info("Running processes will not be restarted automatically")
+        logging.info("Until the next reboot, bootloader changes must be made from a new atomic snapshot")
         sys.exit()
 
 # Handle command: rollback
