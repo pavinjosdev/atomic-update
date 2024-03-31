@@ -350,7 +350,10 @@ chroot {TMP_MOUNT_DIR} mount -a;
     if SHELL:
         logging.info(f"Opening bash shell within chroot of snapshot {atomic_snap}")
         logging.info("Continue with 'exit' or discard with 'exit 1'")
-        ret = os.system(f"chroot {TMP_MOUNT_DIR} env PS1='atomic-update:${{PWD}} # ' bash --noprofile --norc")
+        command = f"""
+chroot {TMP_MOUNT_DIR} bash -c "export PS1='atomic-update:\${{PWD}} # '; exec bash"
+"""
+        ret = os.system(command)
         if ret != 0:
             logging.error(f"Shell returned exit code {ret}. Discarding snapshot {atomic_snap}")
             shell_exec(f"snapper -c {snapper_root_config} delete {atomic_snap}")
@@ -403,15 +406,15 @@ chroot {TMP_MOUNT_DIR} mount -a;
 # Handle command: rollback
 elif COMMAND == "rollback":
     invalid_opts = OPT.copy()
-    invalid_opts.remove("--debug")
+    invalid_opts.remove("--debug") if "--debug" in OPT else None
     if invalid_opts:
         logging.warn(f"Options {', '.join(invalid_opts)!r} do not apply to rollback command")
     if rollback_num:
         logging.info(f"Rolling back to snapshot {rollback_num}")
-        os.system(f"snapper rollback {rollback_num}")
+        os.system(f"snapper rollback -c number {rollback_num}")
     else:
         logging.info("Rolling back to currently booted snapshot")
-        os.system("snapper rollback")
+        os.system("snapper rollback -c number")
 
 # If we're here, remind user to reboot
 logging.info("Please reboot your machine to activate the changes and avoid data loss")
