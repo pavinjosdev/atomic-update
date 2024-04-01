@@ -28,7 +28,7 @@ from shlex import quote
 import xml.etree.ElementTree as ET
 
 # Constants
-VERSION = "0.1.5"
+VERSION = "0.1.6"
 ZYPPER_PID_FILE = "/run/zypp.pid"
 VALID_CMD = ["dup", "run", "rollback"]
 VALID_OPT = ["--reboot", "--apply", "--shell", "--continue", "--no-verify", \
@@ -100,8 +100,9 @@ def get_atomic_snap(snapper_root_config, status):
 # Function to verify snapshot by booting it up as a container
 def verify_snapshot():
     logging.debug("Booting container")
-    cmd = ["systemd-nspawn", "--directory", TMP_MOUNT_DIR, "--ephemeral", "--boot"]
-    subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+    cmd = ["systemd-nspawn", "--directory", TMP_MOUNT_DIR, "--ephemeral", "--boot", \
+           "systemd.mask=local-fs.target", "systemd.mask=auditd.service", "systemd.mask=kdump.service"]
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     logging.debug("Getting container id")
     container_id = None
     for _ in range(10):
@@ -131,19 +132,22 @@ def verify_snapshot():
             break
         time.sleep(1)
     if not startup_finished:
-        logging.warn("Timeout waiting for bootup of ephemeral container from snapshot")
-        logging.debug(f"systemd-analyze time output:\n{out}")
-        out, ret = shell_exec(f"LC_ALL=C machinectl --quiet shell {container_id} /usr/bin/bash -c 'systemctl --quiet --no-pager list-jobs'")
-        logging.debug(f"systemctl list-jobs output:\n{out}")
-    logging.debug("Getting failed systemd units")
-    out, ret = shell_exec(f"LC_ALL=C machinectl --quiet shell {container_id} /usr/bin/bash -c 'systemctl --quiet --no-pager -o json --failed | cat -'")
-    try:
-        out = json.loads(out)
-    except json.JSONDecodeError:
-        logging.error("Could not decode JSON output of failed systemd units. Cancelling task...")
-        logging.debug(f"systemctl --failed output:\n{out}")
+        logging.error("Timeout waiting for bootup of ephemeral container from snapshot. Cancelling task...")
+        # stop container and get the process output for debugging
+        shell_exec(f"machinectl stop {container_id}")
+        # wait for container to stop
+        while True:
+            out, ret = shell_exec(f"LC_ALL=C machinectl --quiet show {container_id}")
+            if ret != 0:
+                break
+            time.sleep(1)
+        out, err = proc.communicate()
+        logging.debug(f"Container console output:\n{out.decode()}")
         cleanup()
         sys.exit()
+    logging.debug("Getting failed systemd units")
+    out, ret = shell_exec(f"LC_ALL=C machinectl --quiet shell {container_id} /usr/bin/bash -c 'systemctl --quiet --no-pager -o json --failed | cat -'")
+    out = json.loads(out)
     failed_units = [item["unit"] for item in out]
     logging.debug(f"Number of failed units = {len(failed_units)}")
     logging.debug(f"Failed units = {', '.join(failed_units)}")
@@ -353,7 +357,7 @@ if COMMAND in ["dup", "run"]:
     # warn user when rebasing from old snapshot
     # thus losing changes to snapshots made in the interim
     if not continue_num and base_snap != default_snap:
-        logging.warn(f"This snapshot is being created from a different base ({base_snap}) " \
+        logging.warning(f"This snapshot is being created from a different base ({base_snap}) " \
                     f"than the previous default snapshot ({default_snap}) and does not " \
                     f"contain the changes from the latter.")
     # create new read-write snapshot to perform atomic update in
@@ -516,7 +520,7 @@ elif COMMAND == "rollback":
     invalid_opts = OPT.copy()
     invalid_opts.remove("--debug") if "--debug" in OPT else None
     if invalid_opts:
-        logging.warn(f"Options {', '.join(invalid_opts)!r} do not apply to rollback command")
+        logging.warning(f"Options {', '.join(invalid_opts)!r} do not apply to rollback command")
     if rollback_num:
         logging.info(f"Rolling back to snapshot {rollback_num}")
         os.system(f"snapper rollback -c number {rollback_num}")
