@@ -28,7 +28,7 @@ from shlex import quote
 import xml.etree.ElementTree as ET
 
 # Constants
-VERSION = "0.1.2"
+VERSION = "0.1.3"
 ZYPPER_PID_FILE = "/run/zypp.pid"
 VALID_CMD = ["dup", "run", "rollback"]
 VALID_OPT = ["--reboot", "--apply", "--shell", "--continue", "--no-verify", \
@@ -294,7 +294,7 @@ if os.getuid() != 0:
 # Bail out if required dependecies are not available
 programs = ["zypper", "snapper", "btrfs", "echo", "ps", "sed", "awk", "bash", "sort", \
             "env", "chroot", "mount", "umount", "rmdir", "findmnt", "systemd-nspawn", \
-            "systemctl", "machinectl"]
+            "systemctl", "machinectl", "systemd-analyze"]
 for program in programs:
     if not shell_exec(f"command -v {program}"):
         logging.error(f"Bailing out, missing required dependecy {program!r} in PATH ({os.environ.get('PATH')}) " \
