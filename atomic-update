@@ -28,7 +28,7 @@ from shlex import quote
 import xml.etree.ElementTree as ET
 
 # Constants
-VERSION = "0.1.1"
+VERSION = "0.1.2"
 ZYPPER_PID_FILE = "/run/zypp.pid"
 VALID_CMD = ["dup", "run", "rollback"]
 VALID_OPT = ["--reboot", "--apply", "--shell", "--continue", "--no-verify", \
@@ -380,7 +380,7 @@ if COMMAND in ["dup", "run"]:
     rootfs_device = out["source"].split("[")[0]
     logging.debug(f"Btrfs root device: {rootfs_device}")
     # populate temp dir with atomic snapshot mounts
-    logging.info("Setting up temp mounts...")
+    logging.debug("Setting up temp mounts...")
     commands = f"""
 mount -o subvol={snap_subvol} {rootfs_device} {TMP_MOUNT_DIR};
 for i in dev proc run sys; do mount --rbind --make-rslave /$i {TMP_MOUNT_DIR}/$i; done;
@@ -411,7 +411,8 @@ chroot {TMP_MOUNT_DIR} mount -a;
                 shell_exec(f"snapper -c {snapper_root_config} delete {atomic_snap}")
                 cleanup()
                 sys.exit(9)
-        logging.info(f"Distribution upgrade completed successfully")
+        else:
+            logging.info(f"Distribution upgrade completed successfully")
     elif COMMAND == "run":
         exec_cmd = ' '.join(ARG)
         logging.info(f"Running command {exec_cmd!r} within chroot...")
@@ -423,7 +424,8 @@ chroot {TMP_MOUNT_DIR} mount -a;
                 shell_exec(f"snapper -c {snapper_root_config} delete {atomic_snap}")
                 cleanup()
                 sys.exit(9)
-        logging.info("Command run successfully")
+        else:
+            logging.info("Command run successfully")
     if SHELL:
         logging.info(f"Opening bash shell within chroot of snapshot {atomic_snap}")
         logging.info("Continue with 'exit 0' or discard with 'exit 1'")
