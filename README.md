@@ -92,7 +92,20 @@ sudo atomic-update --shell run true
 sudo atomic-update --shell run bash -c 'date | awk "{print \$1}" && whoami'
 ```
 
-6. Rollback to currently booted snapshot
+6. Troubleshoot a failing dup by running dup interactively and dropping into a bash shell afterward
+```
+sudo atomic-update --shell --interactive dup
+```
+
+7. Continue making updates to the previous snapshot in a new snapshot
+```
+sudo atomic-update --shell --continue run true
+```
+
+> Without `--continue` option, atomic-update would always base the new snapshot from the currently booted snapshot.
+Use this option to not lose changes made to a previous snapshot. Option `--apply` implies continue.
+
+8. Rollback to currently booted snapshot
 ```
 sudo atomic-update rollback
 ```
