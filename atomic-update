@@ -28,7 +28,7 @@ from shlex import quote
 import xml.etree.ElementTree as ET
 
 # Constants
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 ZYPPER_PID_FILE = "/run/zypp.pid"
 VALID_CMD = ["dup", "run", "rollback"]
 VALID_OPT = ["--reboot", "--apply", "--shell", "--continue", "--no-verify", \
@@ -405,20 +405,24 @@ chroot {TMP_MOUNT_DIR} mount -a;
         logging.info("Performing distribution upgrade within chroot...")
         ret = os.system(f"zypper --root {TMP_MOUNT_DIR} {'' if CONFIRM else '--non-interactive'} --no-cd dist-upgrade")
         if ret != 0:
-            logging.error(f"Zypper returned exit code {ret}. Discarding snapshot {atomic_snap}")
-            shell_exec(f"snapper -c {snapper_root_config} delete {atomic_snap}")
-            cleanup()
-            sys.exit(9)
+            logging.error(f"Zypper returned exit code {ret}")
+            if not SHELL:
+                logging.info(f"Discarding snapshot {atomic_snap}")
+                shell_exec(f"snapper -c {snapper_root_config} delete {atomic_snap}")
+                cleanup()
+                sys.exit(9)
         logging.info(f"Distribution upgrade completed successfully")
     elif COMMAND == "run":
         exec_cmd = ' '.join(ARG)
         logging.info(f"Running command {exec_cmd!r} within chroot...")
         ret = os.system(f"chroot {TMP_MOUNT_DIR} {exec_cmd}")
         if ret != 0:
-            logging.error(f"Command returned exit code {ret}. Discarding snapshot {atomic_snap}")
-            shell_exec(f"snapper -c {snapper_root_config} delete {atomic_snap}")
-            cleanup()
-            sys.exit(9)
+            logging.error(f"Command returned exit code {ret}")
+            if not SHELL:
+                logging.info(f"Discarding snapshot {atomic_snap}")
+                shell_exec(f"snapper -c {snapper_root_config} delete {atomic_snap}")
+                cleanup()
+                sys.exit(9)
         logging.info("Command run successfully")
     if SHELL:
         logging.info(f"Opening bash shell within chroot of snapshot {atomic_snap}")
