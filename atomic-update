@@ -28,7 +28,7 @@ from shlex import quote
 import xml.etree.ElementTree as ET
 
 # Constants
-VERSION = "0.1.3"
+VERSION = "0.1.4"
 ZYPPER_PID_FILE = "/run/zypp.pid"
 VALID_CMD = ["dup", "run", "rollback"]
 VALID_OPT = ["--reboot", "--apply", "--shell", "--continue", "--no-verify", \
@@ -403,7 +403,7 @@ chroot {TMP_MOUNT_DIR} mount -a;
             cleanup()
             sys.exit()
         logging.info("Performing distribution upgrade within chroot...")
-        ret = os.system(f"zypper --root {TMP_MOUNT_DIR} {'' if CONFIRM else '--non-interactive'} --no-cd dist-upgrade")
+        ret = os.system(f"zypper --root {TMP_MOUNT_DIR} {'' if CONFIRM else '--non-interactive'} --no-cd dist-upgrade --auto-agree-with-licenses")
         if ret != 0:
             logging.error(f"Zypper returned exit code {ret}")
             if not SHELL:
