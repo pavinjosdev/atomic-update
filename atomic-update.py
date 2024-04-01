@@ -84,21 +84,78 @@ def get_snaps(snapper_root_config):
         default_snap = item["number"] if item["default"] else default_snap
     return active_snap, default_snap
 
-# Function to get latest atomic snapshot
-def get_atomic_snap(snapper_root_config):
+# Function to get latest atomic snapshot of status
+# valid status: created, pending, finished
+def get_atomic_snap(snapper_root_config, status):
     snaps_json = shell_exec(f"snapper --jsonout -c {snapper_root_config} list --disable-used-space")[0]
     snaps = json.loads(snaps_json)
     snaps[snapper_root_config].reverse()
     for item in snaps[snapper_root_config]:
         try:
-            if item["userdata"]["atomic"] == "yes":
+            if item["userdata"]["atomic"] == status:
                 return item["number"]
         except:
             pass
 
+# Function to verify snapshot by booting it up as a container
+def verify_snapshot():
+    logging.debug("Booting container")
+    cmd = ["systemd-nspawn", "--directory", TMP_MOUNT_DIR, "--ephemeral", "--boot"]
+    subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+    logging.debug("Getting container id")
+    container_id = None
+    for _ in range(10):
+        out, ret = shell_exec("LC_ALL=C machinectl --quiet --no-pager -o json list")
+        containers = json.loads(out)
+        for container in containers:
+            if ( container["class"] == "container" and container["service"] == "systemd-nspawn" and
+            container["machine"].startswith(f"{TMP_MOUNT_DIR.split('/').pop()}") ):
+                container_id = container["machine"]
+                break
+        if container_id:
+            break
+        time.sleep(1)
+    logging.debug(f"Container ID = {container_id}")
+    if not container_id:
+        logging.error("Could not bootup ephemeral container from snapshot. Cancelling task...")
+        cleanup()
+        sys.exit()
+    logging.debug("Waiting for container bootup to finish...")
+    startup_finished = False
+    for _ in range(120):
+        out, ret = shell_exec(f"LC_ALL=C machinectl --quiet shell {container_id} /usr/bin/bash -c 'systemd-analyze time'")
+        if out.find("Startup finished") != -1:
+            startup_finished = True
+            break
+        if startup_finished:
+            break
+        time.sleep(1)
+    if not startup_finished:
+        logging.error("Timeout waiting for bootup of ephemeral container from snapshot. Cancelling task...")
+        cleanup()
+        sys.exit()
+    logging.debug("Getting failed systemd units")
+    out, ret = shell_exec(f"LC_ALL=C machinectl --quiet shell {container_id} /usr/bin/bash -c 'systemctl --quiet --no-pager -o json --failed | cat -'")
+    out = json.loads(out)
+    failed_units = [item["unit"] for item in out]
+    logging.debug(f"Number of failed units = {len(failed_units)}")
+    logging.debug(f"Failed units = {', '.join(failed_units)}")
+    logging.debug("Stopping container...")
+    shell_exec(f"machinectl stop {container_id}")
+    return failed_units
+
 # Function to cleanup on SIGINT or successful completion
 def cleanup():
     logging.info("Cleaning up...")
+    logging.debug("Stopping ephemeral systemd-nspawn containers...")
+    out, ret = shell_exec("LC_ALL=C machinectl --quiet --no-pager -o json list")
+    containers = json.loads(out)
+    for container in containers:
+        if ( container["class"] == "container" and container["service"] == "systemd-nspawn" and
+        container["machine"].startswith(f"{TMP_MOUNT_DIR.split('/').pop()}") ):
+            container_id = container["machine"]
+            shell_exec(f"machinectl stop {container_id}")
+    logging.debug("Cleaning up temp mounts...")
     umount_command = f"""
 LC_ALL=C mount -l | grep '{TMP_MOUNT_DIR}' | awk '{{print $3}}' | awk '{{print length, $0}}' | sort -rn | awk '{{print $2}}' | awk '{{system("umount " $0)}}';
 """
@@ -107,9 +164,17 @@ LC_ALL=C mount -l | grep '{TMP_MOUNT_DIR}' | awk '{{print $3}}' | awk '{{print l
         if out == "" and ret == 0:
             break
         time.sleep(0.01)
+    logging.debug("Cleaning up temp dirs...")
     shell_exec(f"rmdir {quote(TMP_MOUNT_DIR)}")
     shell_exec(f"rmdir {quote(TMP_DIR)}")
+    logging.debug("Cleaning up unfinished snapshots...")
+    snapper_root_config = get_snapper_root_config()
+    for status in ["created", "pending"]:
+        snap_num = get_atomic_snap(snapper_root_config, status)
+        if snap_num:
+            shell_exec(f"snapper -c {snapper_root_config} delete {snap_num}")
 
+# Function to handle SIGINT
 def sigint_handler(signum, frame):
     signal.signal(signum, signal.SIG_IGN) # ignore additional signals
     cleanup()
@@ -287,16 +352,18 @@ if COMMAND in ["dup", "run"]:
     # create new read-write snapshot to perform atomic update in
     out, ret = shell_exec(f"snapper -c {snapper_root_config} create -c number " \
                           f"-d 'Atomic update of #{base_snap}' " \
-                          f"-u 'atomic=yes' --from {base_snap} --read-write")
+                          f"-u 'atomic=created' --from {base_snap} --read-write")
     if ret != 0:
         logging.error(f"Could not create read-write snapshot to perform atomic update in")
         sys.exit(6)
     # get latest atomic snapshot number we just created
-    atomic_snap = get_atomic_snap(snapper_root_config)
+    atomic_snap = get_atomic_snap(snapper_root_config, "created")
     logging.debug(f"Latest atomic snapshot number: {atomic_snap}")
     logging.info(f"Using snapshot {base_snap} as base for new snapshot {atomic_snap}")
     snap_subvol = f"@/.snapshots/{atomic_snap}/snapshot"
     snap_dir = snap_subvol.lstrip("@")
+    # update atomic snapshot status
+    shell_exec(f"snapper -c {snapper_root_config} modify -u 'atomic=pending' {atomic_snap}")
     # check the latest atomic snapshot exists as btrfs subvolume
     out, ret = shell_exec(f"LC_ALL=C btrfs subvolume list / | grep '{snap_subvol}'")
     if ret != 0:
@@ -320,6 +387,10 @@ for i in dev proc run sys; do mount --rbind --make-rslave /$i {TMP_MOUNT_DIR}/$i
 chroot {TMP_MOUNT_DIR} mount -a;
 """
     shell_exec(commands)
+    # verify snapshot prior to performing update
+    if not NO_VERIFY:
+        logging.info("Verifying snapshot prior to update...")
+        pre_failed_units = verify_snapshot()
     if COMMAND == "dup":
         # check if dup has anything to do
         logging.info("Checking for packages to upgrade")
@@ -351,7 +422,7 @@ chroot {TMP_MOUNT_DIR} mount -a;
         logging.info("Command run successfully")
     if SHELL:
         logging.info(f"Opening bash shell within chroot of snapshot {atomic_snap}")
-        logging.info("Continue with 'exit' or discard with 'exit 1'")
+        logging.info("Continue with 'exit 0' or discard with 'exit 1'")
         command = f"""
 chroot {TMP_MOUNT_DIR} bash -c "export PS1='atomic-update:\${{PWD}} # '; exec bash"
 """
@@ -361,6 +432,20 @@ chroot {TMP_MOUNT_DIR} bash -c "export PS1='atomic-update:\${{PWD}} # '; exec ba
             shell_exec(f"snapper -c {snapper_root_config} delete {atomic_snap}")
             cleanup()
             sys.exit()
+    # verify snapshot after update
+    if not NO_VERIFY:
+        logging.info("Verifying snapshot post update...")
+        post_failed_units = verify_snapshot()
+        new_failed_units = list( set(post_failed_units) - set(pre_failed_units) )
+        if new_failed_units:
+            logging.error(f"Discarding snapshot {atomic_snap} as the following new " \
+                          f"systemd units have failed since update: {', '.join(new_failed_units)}")
+            shell_exec(f"snapper -c {snapper_root_config} delete {atomic_snap}")
+            cleanup()
+            sys.exit()
+    # on success, update atomic snapshot status
+    shell_exec(f"snapper -c {snapper_root_config} modify -u 'atomic=finished' {atomic_snap}")
+    # on success, set new snapshot as the default
     logging.info(f"Setting snapshot {atomic_snap} ({snap_dir}) as the new default")
     shell_exec(f"snapper -c {snapper_root_config} modify --default {atomic_snap}")
     # perform cleanup
