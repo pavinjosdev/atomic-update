@@ -28,7 +28,7 @@ from shlex import quote
 import xml.etree.ElementTree as ET
 
 # Constants
-VERSION = "0.1.4"
+VERSION = "0.1.5"
 ZYPPER_PID_FILE = "/run/zypp.pid"
 VALID_CMD = ["dup", "run", "rollback"]
 VALID_OPT = ["--reboot", "--apply", "--shell", "--continue", "--no-verify", \
@@ -122,7 +122,7 @@ def verify_snapshot():
         sys.exit()
     logging.debug("Waiting for container bootup to finish...")
     startup_finished = False
-    for _ in range(120):
+    for _ in range(60):
         out, ret = shell_exec(f"LC_ALL=C machinectl --quiet shell {container_id} /usr/bin/bash -c 'systemd-analyze time'")
         if out.find("Startup finished") != -1:
             startup_finished = True
@@ -131,12 +131,19 @@ def verify_snapshot():
             break
         time.sleep(1)
     if not startup_finished:
-        logging.error("Timeout waiting for bootup of ephemeral container from snapshot. Cancelling task...")
-        cleanup()
-        sys.exit()
+        logging.warn("Timeout waiting for bootup of ephemeral container from snapshot")
+        logging.debug(f"systemd-analyze time output:\n{out}")
+        out, ret = shell_exec(f"LC_ALL=C machinectl --quiet shell {container_id} /usr/bin/bash -c 'systemctl --quiet --no-pager list-jobs'")
+        logging.debug(f"systemctl list-jobs output:\n{out}")
     logging.debug("Getting failed systemd units")
     out, ret = shell_exec(f"LC_ALL=C machinectl --quiet shell {container_id} /usr/bin/bash -c 'systemctl --quiet --no-pager -o json --failed | cat -'")
-    out = json.loads(out)
+    try:
+        out = json.loads(out)
+    except json.JSONDecodeError:
+        logging.error("Could not decode JSON output of failed systemd units. Cancelling task...")
+        logging.debug(f"systemctl --failed output:\n{out}")
+        cleanup()
+        sys.exit()
     failed_units = [item["unit"] for item in out]
     logging.debug(f"Number of failed units = {len(failed_units)}")
     logging.debug(f"Failed units = {', '.join(failed_units)}")
