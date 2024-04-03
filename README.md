@@ -66,6 +66,19 @@ Options:
   --version             - Print version number and exit
 ```
 
+---
+
+## Video examples
+1. Perform distribution upgrade on Tumbleweed/Slowroll and apply it live without rebooting
+
+![atomic-dup](https://github.com/pavinjosdev/atomic-update/assets/11430516/29f74398-89ce-4a7f-ae8a-b0d8936ccaa1)
+
+2. Test what happens when an update breaks
+
+![break-snapshot](https://github.com/pavinjosdev/atomic-update/assets/11430516/ece7f041-5028-464b-85f3-40702c306930)
+
+---
+
 ## Examples
 1. Perform distribution upgrade on Tumbleweed and reboot
 ```
