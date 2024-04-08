@@ -28,7 +28,7 @@ from shlex import quote
 import xml.etree.ElementTree as ET
 
 # Constants
-VERSION = "0.1.6"
+VERSION = "0.1.7"
 ZYPPER_PID_FILE = "/run/zypp.pid"
 VALID_CMD = ["dup", "run", "rollback"]
 VALID_OPT = ["--reboot", "--apply", "--shell", "--continue", "--no-verify", \
@@ -307,7 +307,7 @@ programs = ["zypper", "snapper", "btrfs", "echo", "ps", "sed", "awk", "bash", "s
             "env", "chroot", "mount", "umount", "rmdir", "findmnt", "systemd-nspawn", \
             "systemctl", "machinectl", "systemd-analyze"]
 for program in programs:
-    if not shell_exec(f"command -v {program}"):
+    if not shell_exec(f"command -v {program}")[0]:
         logging.error(f"Bailing out, missing required dependecy {program!r} in PATH ({os.environ.get('PATH')}) " \
             f"for user {os.environ.get('USER')!r}. The following programs " \
             f"are required for atomic-update to function: {', '.join(programs)}"
@@ -325,7 +325,7 @@ if os.path.isfile(ZYPPER_PID_FILE):
         except ValueError:
             pid = None
         if pid:
-            pid_program = shell_exec(f"ps -p {pid} | sed '1d' | awk '{{print $4}}'")
+            pid_program = shell_exec(f"ps -p {pid} | sed '1d' | awk '{{print $4}}'")[0]
             if pid_program:
                 msg = f"zypper is already invoked by the application with pid {pid} ({pid_program}).\n" \
                 "Close this application before trying again."
