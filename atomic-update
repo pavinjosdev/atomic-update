@@ -28,7 +28,7 @@ from shlex import quote
 import xml.etree.ElementTree as ET
 
 # Constants
-VERSION = "0.1.7"
+VERSION = "0.1.8"
 ZYPPER_PID_FILE = "/run/zypp.pid"
 VALID_CMD = ["dup", "run", "rollback"]
 VALID_OPT = ["--reboot", "--apply", "--shell", "--continue", "--no-verify", \
@@ -425,8 +425,8 @@ chroot {TMP_MOUNT_DIR} mount -a;
         else:
             logging.info(f"Distribution upgrade completed successfully")
     elif COMMAND == "run":
-        exec_cmd = ' '.join(ARG)
-        logging.info(f"Running command {exec_cmd!r} within chroot...")
+        exec_cmd = " ".join( [quote(part) for part in ARG] )
+        logging.info(f"Running command >>> {exec_cmd} <<< within chroot...")
         ret = os.system(f"chroot {TMP_MOUNT_DIR} {exec_cmd}")
         if ret != 0:
             logging.error(f"Command returned exit code {ret}")
