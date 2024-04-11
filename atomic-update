@@ -28,7 +28,7 @@ from shlex import quote
 import xml.etree.ElementTree as ET
 
 # Constants
-VERSION = "0.1.8"
+VERSION = "0.1.9"
 ZYPPER_PID_FILE = "/run/zypp.pid"
 VALID_CMD = ["dup", "run", "rollback"]
 VALID_OPT = ["--reboot", "--apply", "--shell", "--continue", "--no-verify", \
@@ -395,7 +395,7 @@ if COMMAND in ["dup", "run"]:
     commands = f"""
 mount -o subvol={snap_subvol} {rootfs_device} {TMP_MOUNT_DIR};
 for i in dev proc run sys; do mount --rbind --make-rslave /$i {TMP_MOUNT_DIR}/$i; done;
-chroot {TMP_MOUNT_DIR} mount -a;
+chroot {TMP_MOUNT_DIR} mount -a -O no_netdev;
 """
     shell_exec(commands)
     # verify snapshot prior to performing update
