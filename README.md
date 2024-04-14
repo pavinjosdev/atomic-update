@@ -15,9 +15,10 @@ atomic-update uses [btrfs subvolumes](https://btrfs.readthedocs.io/en/latest/Sub
 - If the changes are unsuccessful, the new snapshot is discarded
 
 Performing updates like this have a number of benefits:
-- Prevent a broken system due to system crash, power loss, etc.
+- Prevent a broken system due to system crash, power loss, or other unforeseen events during an update
+- Prevent updates from impacting the currently running system, causing the currently running programs, including but not limited to the desktop environment to crash
 - Prevent non-interactive updates from breaking system due to conflicts/errors causing zypper to abort (the default action on conflicts/errors) in the middle of an update
-- Prevent updates from causing an inconsistent system state due to failing scripts but an otherwise successful update
+- Prevent updates from causing an inconsistent system state due to failing scripts during an otherwise successful update
 - Avoid having to reboot into read-only grub snapshots to perform rollback
 
 Downsides:
