@@ -28,7 +28,7 @@ from shlex import quote
 import xml.etree.ElementTree as ET
 
 # Constants
-VERSION = "0.1.9"
+VERSION = "0.1.10"
 ZYPPER_PID_FILE = "/run/zypp.pid"
 VALID_CMD = ["dup", "run", "rollback"]
 VALID_OPT = ["--reboot", "--apply", "--shell", "--continue", "--no-verify", \
@@ -404,12 +404,16 @@ chroot {TMP_MOUNT_DIR} mount -a -O no_netdev;
         pre_failed_units = verify_snapshot()
     if COMMAND == "dup":
         # check if dup has anything to do
-        logging.info("Checking for packages to upgrade")
+        logging.info("Checking for packages to upgrade...")
         xml_output, ret = shell_exec(f"LC_ALL=C zypper --root {TMP_MOUNT_DIR} --non-interactive --no-cd --xmlout dist-upgrade --dry-run")
         docroot = ET.fromstring(xml_output)
+        num_pkgs = None
         for item in docroot.iter('install-summary'):
             num_pkgs = int(item.attrib["packages-to-change"])
         if not num_pkgs:
+            if xml_output.find("conflicts") != -1:
+                logging.warning("There are package conflicts that must be manually resolved. See output of:\n" \
+                                "zypper --non-interactive --no-cd dist-upgrade --dry-run")
             logging.info("Nothing to do. Exiting...")
             cleanup()
             sys.exit()
