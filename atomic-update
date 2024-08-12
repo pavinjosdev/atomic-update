@@ -28,7 +28,7 @@ from shlex import quote
 import xml.etree.ElementTree as ET
 
 # Constants
-VERSION = "0.1.11"
+VERSION = "0.1.12"
 ZYPPER_PID_FILE = "/run/zypp.pid"
 VALID_CMD = ["dup", "run", "rollback"]
 VALID_OPT = ["--reboot", "--apply", "--shell", "--continue", "--no-verify", \
@@ -168,7 +168,7 @@ def cleanup():
             shell_exec(f"machinectl stop {container_id}")
     logging.debug("Cleaning up temp mounts...")
     umount_command = f"""
-LC_ALL=C mount -l | grep '{TMP_MOUNT_DIR}' | awk '{{print $3}}' | awk '{{print length, $0}}' | sort -rn | awk '{{print $2}}' | awk '{{system("umount " $0)}}';
+LC_ALL=C mount -l | grep '{TMP_MOUNT_DIR}' | awk '{{print $3}}' | awk '{{print length, $0}}' | sort -rn | awk '{{printf "\\047%s\\047\\n", $2}}' | awk '{{system("umount " $0)}}';
 """
     while True:
         out, ret = shell_exec(umount_command)
