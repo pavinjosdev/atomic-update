@@ -241,7 +241,7 @@ if COMMAND == "run" and not ARG:
     sys.exit(1)
 
 DEBUG = True if "--debug" in OPT else False
-CONFIRM = True if "--interactive" in OPT else False
+INTERACTIVE = True if "--interactive" in OPT else False
 REBOOT = True if "--reboot" in OPT else False
 APPLY = True if "--apply" in OPT else False
 SHELL = True if "--shell" in OPT else False
@@ -406,19 +406,22 @@ chroot {TMP_MOUNT_DIR} mount -a -O no_netdev;
         # check if dup has anything to do
         logging.info("Checking for packages to upgrade...")
         xml_output, ret = shell_exec(f"LC_ALL=C zypper --root {TMP_MOUNT_DIR} --non-interactive --no-cd --xmlout dist-upgrade --dry-run")
+        if ret == 0 and xml_output.find("Nothing to do") != -1:
+            logging.info("Nothing to do. Exiting...")
+            cleanup()
+            sys.exit()
         docroot = ET.fromstring(xml_output)
         num_pkgs = None
         for item in docroot.iter('install-summary'):
             num_pkgs = int(item.attrib["packages-to-change"])
-        if not num_pkgs:
-            if xml_output.find("conflicts") != -1 or xml_output.find("nothing provides") != -1:
-                logging.warning("There are package conflicts that must be manually resolved. See output of:\n" \
-                                "zypper --non-interactive --no-cd dist-upgrade --dry-run")
-            logging.info("Nothing to do. Exiting...")
+        if not num_pkgs and not INTERACTIVE:
+            logging.warning("There are package conflicts that must be manually resolved. See output of:\n" \
+                            "zypper --non-interactive --no-cd dist-upgrade --dry-run\n" \
+                            "OR, run atomic-update using '--interactive' option.")
             cleanup()
-            sys.exit()
+            sys.exit(9)
         logging.info("Performing distribution upgrade within chroot...")
-        ret = os.system(f"zypper --root {TMP_MOUNT_DIR} {'' if CONFIRM else '--non-interactive'} --no-cd dist-upgrade --auto-agree-with-licenses")
+        ret = os.system(f"zypper --root {TMP_MOUNT_DIR} {'' if INTERACTIVE else '--non-interactive'} --no-cd dist-upgrade --auto-agree-with-licenses")
         if ret != 0:
             logging.error(f"Zypper returned exit code {ret}")
             if not SHELL:
