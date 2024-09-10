@@ -28,7 +28,7 @@ from shlex import quote
 import xml.etree.ElementTree as ET
 
 # Constants
-VERSION = "0.1.12"
+VERSION = "0.1.13"
 ZYPPER_PID_FILE = "/run/zypp.pid"
 VALID_CMD = ["dup", "run", "rollback"]
 VALID_OPT = ["--reboot", "--apply", "--shell", "--continue", "--no-verify", \
@@ -146,14 +146,16 @@ def verify_snapshot():
         cleanup()
         sys.exit()
     logging.debug("Getting failed systemd units")
-    out, ret = shell_exec(f"LC_ALL=C machinectl --quiet shell {container_id} /usr/bin/bash -c 'systemctl --quiet --no-pager -o json --failed | cat -'")
+    out, ret = shell_exec(f"LC_ALL=C machinectl --quiet shell {container_id} /usr/bin/bash -c 'systemctl --quiet --no-pager -o json | cat'")
     out = json.loads(out)
-    failed_units = [item["unit"] for item in out]
-    logging.debug(f"Number of failed units = {len(failed_units)}")
+    all_units = [item["unit"] for item in out]
+    failed_units = [item["unit"] for item in out if item["active"] == "failed"]
+    logging.debug(f"Total number of units = {len(all_units)} ; Number of failed units = {len(failed_units)}")
+    logging.debug(f"All units = {', '.join(all_units)}")
     logging.debug(f"Failed units = {', '.join(failed_units)}")
     logging.debug("Stopping container...")
     shell_exec(f"machinectl stop {container_id}")
-    return failed_units
+    return all_units, failed_units
 
 # Function to cleanup on SIGINT or successful completion
 def cleanup():
@@ -401,7 +403,7 @@ chroot {TMP_MOUNT_DIR} mount -a -O no_netdev;
     # verify snapshot prior to performing update
     if not NO_VERIFY:
         logging.info("Verifying snapshot prior to update...")
-        pre_failed_units = verify_snapshot()
+        pre_all_units, pre_failed_units = verify_snapshot()
     if COMMAND == "dup":
         # check if dup has anything to do
         logging.info("Checking for packages to upgrade...")
@@ -459,11 +461,12 @@ chroot {TMP_MOUNT_DIR} bash -c "export PS1='atomic-update:\${{PWD}} # '; exec ba
     # verify snapshot after update
     if not NO_VERIFY:
         logging.info("Verifying snapshot post update...")
-        post_failed_units = verify_snapshot()
-        new_failed_units = list( set(post_failed_units) - set(pre_failed_units) )
-        if new_failed_units:
-            logging.error(f"Discarding snapshot {atomic_snap} as the following new " \
-                          f"systemd units have failed since update: {', '.join(new_failed_units)}")
+        post_all_units, post_failed_units = verify_snapshot()
+        newly_failed_units = list( set(post_failed_units) - set(pre_failed_units) )
+        update_failed_units = [unit for unit in newly_failed_units if unit in pre_all_units]
+        if update_failed_units:
+            logging.error(f"Discarding snapshot {atomic_snap} as the following " \
+                          f"systemd units have failed since update: {', '.join(update_failed_units)}")
             shell_exec(f"snapper -c {snapper_root_config} delete {atomic_snap}")
             cleanup()
             sys.exit()
