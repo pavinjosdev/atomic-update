@@ -28,7 +28,7 @@ from shlex import quote
 import xml.etree.ElementTree as ET
 
 # Constants
-VERSION = "0.1.13"
+VERSION = "0.1.14"
 ZYPPER_PID_FILE = "/run/zypp.pid"
 VALID_CMD = ["dup", "run", "rollback"]
 VALID_OPT = ["--reboot", "--apply", "--shell", "--continue", "--no-verify", \
@@ -202,12 +202,26 @@ signal.signal(signal.SIGINT, sigint_handler)
 COMMAND = ""
 OPT = []
 ARG = []
+SKIP = False
+continue_num = None # optional snapshot number to continue from
 for index, item in enumerate(sys.argv):
-    if index == 0:
+    if SKIP or index == 0:
+        SKIP = False
         continue
     if item.startswith("--"):
         if item in VALID_OPT:
             OPT.append(item)
+            if item == "--continue":
+                try:
+                    continue_num = int(sys.argv[index + 1])
+                    if not continue_num in range(1, 999999):
+                        print("Invalid value for option '--continue'. Must be between 1 to 999999 (inclusive)")
+                        sys.exit(1)
+                    SKIP = True
+                except ValueError:
+                    pass
+                except IndexError:
+                    pass
         else:
             print(f"Invalid option {item!r}. See usage below.\n")
             print(help_text.strip())
@@ -257,23 +271,9 @@ logging.basicConfig(
     level=logging.DEBUG if DEBUG else logging.INFO,
 )
 
-# check if there's a snapshot number provided to continue from
-continue_num = None
-if "--continue" in OPT:
-    try:
-        continue_num = int(sys.argv[sys.argv.index("--continue") + 1])
-        if not continue_num in range(1, 999999):
-            logging.error("Invalid value for option '--continue'. Must be between 1 to 999999 (inclusive)")
-            sys.exit(1)
-    except ValueError:
-        logging.debug("No numerical value provided for option '--continue'")
-        pass
-    except IndexError:
-        logging.debug("No value provided for option '--continue'")
-        pass
-
+# validate optional snapshot provided to continue from exists
 if continue_num:
-    ret = os.system(f"btrfs subvolume list / | grep '@/.snapshots/{continue_num}/snapshot'")
+    ret = os.system(f"btrfs subvolume list / | grep '@/.snapshots/{continue_num}/snapshot' > /dev/null 2>&1")
     if ret != 0:
         logging.error(f"Provided snapshot {continue_num} for option '--continue' does not exist")
         sys.exit(1)
@@ -294,7 +294,7 @@ if COMMAND == "rollback":
         pass
 
 if rollback_num:
-    ret = os.system(f"btrfs subvolume list / | grep '@/.snapshots/{rollback_num}/snapshot'")
+    ret = os.system(f"btrfs subvolume list / | grep '@/.snapshots/{rollback_num}/snapshot' > /dev/null 2>&1")
     if ret != 0:
         logging.error(f"Provided snapshot {rollback_num} for rollback does not exist")
         sys.exit(1)
