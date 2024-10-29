@@ -28,11 +28,31 @@ from shlex import quote
 import xml.etree.ElementTree as ET
 
 # Constants
-VERSION = "0.1.14"
+VERSION = "0.1.15"
 ZYPPER_PID_FILE = "/run/zypp.pid"
 VALID_CMD = ["dup", "run", "rollback"]
 VALID_OPT = ["--reboot", "--apply", "--shell", "--continue", "--no-verify", \
             "--interactive", "--debug", "--help", "--version"]
+
+# Required programs / dependecies
+REQUIRED_DEP = ["zypper", "snapper", "btrfs", "echo", "ps", "sed", "awk", "bash", "sort", \
+            "env", "chroot", "mount", "umount", "rmdir", "findmnt", "systemd-nspawn", \
+            "systemctl", "machinectl", "systemd-analyze"]
+
+# The exit code of these programs (if it exists) in addition to the required programs
+# will be checked pre/post each transaction/update
+CHK_PROGRAMS = [
+    "Xorg",
+    "Xwayland",
+    "pipewire",
+    "wireplumber",
+    "firefox",
+    "thunderbird",
+    "gdm",
+    "gnome-shell",
+    "gnome-control-center",
+    # TODO: add the display manager, graphical shell, and settings app binary for other DE/WMs
+]
 
 # Command help/usage info
 help_text = """
@@ -97,8 +117,25 @@ def get_atomic_snap(snapper_root_config, status):
         except:
             pass
 
-# Function to verify snapshot by booting it up as a container
-def verify_snapshot():
+# Function to verify snapshot's ability to run important programs -
+# acts as a basic check for missing and incompatible libraries
+def verify_programs(TMP_MOUNT_DIR):
+    failed_programs = []
+    programs = REQUIRED_DEP + CHK_PROGRAMS
+    logging.debug(f"Verifying programs: {', '.join(programs)}")
+    for program in programs:
+        version_str = "-version" if program in ["Xorg", "Xwayland"] else "--version"
+        command = f"chroot {TMP_MOUNT_DIR} bash -c '" \
+            f"command -v {program} || exit 0 && sudo -u nobody {program} {version_str}" \
+            f"' > /dev/null 2>&1"
+        out, ret = shell_exec(command)
+        if ret != 0:
+            failed_programs.append(program)
+    logging.debug(f"Failed programs: {', '.join(failed_programs)}")
+    return failed_programs
+
+# Function to verify snapshot's systemd units by booting it up as a container
+def verify_units():
     logging.debug("Booting container")
     cmd = ["systemd-nspawn", "--directory", TMP_MOUNT_DIR, "--ephemeral", "--boot", \
            "systemd.mask=local-fs.target", "systemd.mask=auditd.service", "systemd.mask=kdump.service"]
@@ -305,14 +342,11 @@ if os.getuid() != 0:
     sys.exit(2)
 
 # Bail out if required dependecies are not available
-programs = ["zypper", "snapper", "btrfs", "echo", "ps", "sed", "awk", "bash", "sort", \
-            "env", "chroot", "mount", "umount", "rmdir", "findmnt", "systemd-nspawn", \
-            "systemctl", "machinectl", "systemd-analyze"]
-for program in programs:
+for program in REQUIRED_DEP:
     if not shell_exec(f"command -v {program}")[0]:
         logging.error(f"Bailing out, missing required dependecy {program!r} in PATH ({os.environ.get('PATH')}) " \
             f"for user {os.environ.get('USER')!r}. The following programs " \
-            f"are required for atomic-update to function: {', '.join(programs)}"
+            f"are required for atomic-update to function: {', '.join(REQUIRED_DEP)}"
         )
         sys.exit(3)
 
@@ -403,7 +437,8 @@ chroot {TMP_MOUNT_DIR} mount -a -O no_netdev;
     # verify snapshot prior to performing update
     if not NO_VERIFY:
         logging.info("Verifying snapshot prior to update...")
-        pre_all_units, pre_failed_units = verify_snapshot()
+        pre_all_units, pre_failed_units = verify_units()
+        pre_failed_progs = verify_programs(TMP_MOUNT_DIR)
     if COMMAND == "dup":
         # check if dup has anything to do
         logging.info("Checking for packages to upgrade...")
@@ -461,12 +496,17 @@ chroot {TMP_MOUNT_DIR} bash -c "export PS1='atomic-update:\${{PWD}} # '; exec ba
     # verify snapshot after update
     if not NO_VERIFY:
         logging.info("Verifying snapshot post update...")
-        post_all_units, post_failed_units = verify_snapshot()
+        post_all_units, post_failed_units = verify_units()
         newly_failed_units = list( set(post_failed_units) - set(pre_failed_units) )
         update_failed_units = [unit for unit in newly_failed_units if unit in pre_all_units]
-        if update_failed_units:
-            logging.error(f"Discarding snapshot {atomic_snap} as the following " \
-                          f"systemd units have failed since update: {', '.join(update_failed_units)}")
+        post_failed_progs = verify_programs(TMP_MOUNT_DIR)
+        newly_failed_progs = list( set(post_failed_progs) - set(pre_failed_progs) )
+        if update_failed_units or newly_failed_progs:
+            msg = f"Discarding snapshot {atomic_snap} as new errors were detected after the update. "
+            msg += f"The following programs have failed to run: {', '.join(newly_failed_progs)}. " if newly_failed_progs else ""
+            msg += f"The following systemd units have failed: {', '.join(update_failed_units)}. " if update_failed_units else ""
+            msg = msg.rstrip()
+            logging.error(msg)
             shell_exec(f"snapper -c {snapper_root_config} delete {atomic_snap}")
             cleanup()
             sys.exit()
