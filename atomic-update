@@ -46,6 +46,7 @@ CHK_PROGRAMS = [
     "Xwayland",
     "pipewire",
     "wireplumber",
+    "flatpak",
     "firefox",
     "thunderbird",
     "gdm",
