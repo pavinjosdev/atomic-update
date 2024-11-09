@@ -28,7 +28,7 @@ from shlex import quote
 import xml.etree.ElementTree as ET
 
 # Constants
-VERSION = "0.1.17"
+VERSION = "0.1.18"
 ZYPPER_PID_FILE = "/run/zypp.pid"
 VALID_CMD = ["dup", "run", "rollback"]
 VALID_OPT = ["--reboot", "--apply", "--shell", "--continue", "--no-verify", \
@@ -134,10 +134,11 @@ def verify_programs(TMP_MOUNT_DIR):
         version_str = "-version" if program in ["Xorg", "Xwayland"] else "--version"
         command = f"chroot {TMP_MOUNT_DIR} bash -c '" \
             f"command -v {program} || exit 0 && sudo -u nobody {env_str} {program} {version_str}" \
-            f"' > /dev/null 2>&1"
+            f"'"
         out, ret = shell_exec(command)
         if ret != 0:
             failed_programs.append(program)
+            logging.error(f"Checking {program!r} version returned non-zero exit code {ret} and output:\n{out}")
     logging.debug(f"Failed programs: {', '.join(failed_programs)}")
     return failed_programs
 
