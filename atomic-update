@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 #
 # SPDX-License-Identifier: GPL-3.0-only
 #
@@ -28,7 +28,7 @@ from shlex import quote
 import xml.etree.ElementTree as ET
 
 # Constants
-VERSION = "0.1.18"
+VERSION = "0.1.19"
 ZYPPER_PID_FILE = "/run/zypp.pid"
 VALID_CMD = ["dup", "run", "rollback"]
 VALID_OPT = ["--reboot", "--apply", "--shell", "--continue", "--no-verify", \
@@ -492,7 +492,7 @@ chroot {TMP_MOUNT_DIR} mount -a -O no_netdev;
     if SHELL:
         logging.info(f"Opening bash shell within chroot of snapshot {atomic_snap}")
         logging.info("Continue with 'exit 0' or discard with 'exit 1'")
-        command = f"""
+        command = rf"""
 chroot {TMP_MOUNT_DIR} bash -c "export PS1='atomic-update:\${{PWD}} # '; exec bash"
 """
         ret = os.system(command)
