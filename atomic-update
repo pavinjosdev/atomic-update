@@ -28,7 +28,7 @@ from shlex import quote
 import xml.etree.ElementTree as ET
 
 # Constants
-VERSION = "0.1.19"
+VERSION = "0.1.20"
 ZYPPER_PID_FILE = "/run/zypp.pid"
 VALID_CMD = ["dup", "run", "rollback"]
 VALID_OPT = ["--reboot", "--apply", "--shell", "--continue", "--no-verify", \
@@ -42,6 +42,7 @@ REQUIRED_DEP = ["zypper", "snapper", "btrfs", "echo", "ps", "sed", "awk", "bash"
 # The exit code of these programs (if it exists) in addition to the required programs
 # will be checked pre/post each transaction/update
 CHK_PROGRAMS = [
+    "ssh",
     "Xorg",
     "Xwayland",
     "pipewire",
@@ -121,6 +122,18 @@ def get_atomic_snap(snapper_root_config, status):
         except:
             pass
 
+# Function to get version string (option) associated with various shell programs
+def get_version_string(program):
+    version_str = {
+        "ssh": "-V",
+        "Xorg": "-version",
+        "Xwayland": "-version",
+    }
+    try:
+        return version_str[program]
+    except KeyError:
+        return "--version"
+
 # Function to verify snapshot's ability to run important programs -
 # acts as a basic check for missing and incompatible libraries
 def verify_programs(TMP_MOUNT_DIR):
@@ -131,9 +144,8 @@ def verify_programs(TMP_MOUNT_DIR):
         env_str = ""
         if program == "Hyprland":
             env_str = "XDG_RUNTIME_DIR="
-        version_str = "-version" if program in ["Xorg", "Xwayland"] else "--version"
         command = f"chroot {TMP_MOUNT_DIR} bash -c '" \
-            f"command -v {program} || exit 0 && sudo -u nobody {env_str} {program} {version_str}" \
+            f"command -v {program} || exit 0 && sudo -u nobody {env_str} {program} {get_version_string(program)}" \
             f"'"
         out, ret = shell_exec(command)
         if ret != 0:
