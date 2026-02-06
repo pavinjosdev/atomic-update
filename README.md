@@ -142,7 +142,7 @@ If for some reason it does not cleanup such as when receiving SIGTERM or SIGKILL
 atomic-update keeps its working directory in `/tmp/atomic-update_*`, so a reboot would always cleanup.
 
 ## Known issues
-- When switching to a new snapshot without reboot using the `--apply` option, future updates to the bootloader (prior to a reboot) such as running `update-bootloader` script must be performed from a new atomic snapshot. Failure to do so will necessitate booting from the grub terminal on next cold boot.
+- When switching to a new snapshot without reboot using the `--apply` option, future updates to the bootloader (prior to a reboot) such as running `update-bootloader` script must be performed from a new atomic snapshot. Failure to do so will necessitate booting from the grub terminal on next firmware (re-)boot. ⚠️
 
 Mask the systemd `purge-kernels.service` that can sometimes result in such an unintended scenario and use the following instead:
 
