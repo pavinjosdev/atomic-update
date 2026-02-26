@@ -154,66 +154,6 @@ def verify_programs(TMP_MOUNT_DIR):
     logging.debug(f"Failed programs: {', '.join(failed_programs)}")
     return failed_programs
 
-# Function to verify snapshot's systemd units by booting it up as a container
-def verify_units():
-    logging.debug("Booting container")
-    cmd = ["systemd-nspawn", "--directory", TMP_MOUNT_DIR, "--ephemeral", "--boot", \
-           "systemd.mask=local-fs.target", "systemd.mask=auditd.service", "systemd.mask=kdump.service"]
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    logging.debug("Getting container id")
-    container_id = None
-    for _ in range(10):
-        out, ret = shell_exec("LC_ALL=C machinectl --quiet --no-pager -o json list")
-        containers = json.loads(out)
-        for container in containers:
-            if ( container["class"] == "container" and container["service"] == "systemd-nspawn" and
-            container["machine"].startswith(f"{TMP_MOUNT_DIR.split('/').pop()}") ):
-                container_id = container["machine"]
-                break
-        if container_id:
-            break
-        time.sleep(1)
-    logging.debug(f"Container ID = {container_id}")
-    if not container_id:
-        logging.error("Could not bootup ephemeral container from snapshot. Cancelling task...")
-        cleanup()
-        sys.exit()
-    logging.debug("Waiting for container bootup to finish...")
-    startup_finished = False
-    for _ in range(60):
-        out, ret = shell_exec(f"LC_ALL=C machinectl --quiet shell {container_id} /usr/bin/bash -c 'systemd-analyze time'")
-        if out.find("Startup finished") != -1:
-            startup_finished = True
-            break
-        if startup_finished:
-            break
-        time.sleep(1)
-    if not startup_finished:
-        logging.error("Timeout waiting for bootup of ephemeral container from snapshot. Cancelling task...")
-        # stop container and get the process output for debugging
-        shell_exec(f"machinectl stop {container_id}")
-        # wait for container to stop
-        while True:
-            out, ret = shell_exec(f"LC_ALL=C machinectl --quiet show {container_id}")
-            if ret != 0:
-                break
-            time.sleep(1)
-        out, err = proc.communicate()
-        logging.debug(f"Container console output:\n{out.decode()}")
-        cleanup()
-        sys.exit()
-    logging.debug("Getting failed systemd units")
-    out, ret = shell_exec(f"LC_ALL=C machinectl --quiet shell {container_id} /usr/bin/bash -c 'systemctl --quiet --no-pager -o json | cat'")
-    out = json.loads(out)
-    all_units = [item["unit"] for item in out]
-    failed_units = [item["unit"] for item in out if item["active"] == "failed"]
-    logging.debug(f"Total number of units = {len(all_units)} ; Number of failed units = {len(failed_units)}")
-    logging.debug(f"All units = {', '.join(all_units)}")
-    logging.debug(f"Failed units = {', '.join(failed_units)}")
-    logging.debug("Stopping container...")
-    shell_exec(f"machinectl stop {container_id}")
-    return all_units, failed_units
-
 # Function to cleanup on SIGINT or successful completion
 def cleanup():
     logging.info("Cleaning up...")
@@ -457,7 +397,6 @@ chroot {TMP_MOUNT_DIR} mount -a -O no_netdev;
     # verify snapshot prior to performing update
     if not NO_VERIFY:
         logging.info("Verifying snapshot prior to update...")
-        pre_all_units, pre_failed_units = verify_units()
         pre_failed_progs = verify_programs(TMP_MOUNT_DIR)
     if COMMAND == "dup":
         # check if dup has anything to do
@@ -516,15 +455,11 @@ chroot {TMP_MOUNT_DIR} bash -c "export PS1='atomic-update:\${{PWD}} # '; exec ba
     # verify snapshot after update
     if not NO_VERIFY:
         logging.info("Verifying snapshot post update...")
-        post_all_units, post_failed_units = verify_units()
-        newly_failed_units = list( set(post_failed_units) - set(pre_failed_units) )
-        update_failed_units = [unit for unit in newly_failed_units if unit in pre_all_units]
         post_failed_progs = verify_programs(TMP_MOUNT_DIR)
         newly_failed_progs = list( set(post_failed_progs) - set(pre_failed_progs) )
-        if update_failed_units or newly_failed_progs:
+        if newly_failed_progs:
             msg = f"Discarding snapshot {atomic_snap} as new errors were detected after the update. "
             msg += f"The following programs have failed to run: {', '.join(newly_failed_progs)}. " if newly_failed_progs else ""
-            msg += f"The following systemd units have failed: {', '.join(update_failed_units)}. " if update_failed_units else ""
             msg = msg.rstrip()
             logging.error(msg)
             shell_exec(f"snapper -c {snapper_root_config} delete {atomic_snap}")
