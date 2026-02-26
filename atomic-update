@@ -36,8 +36,7 @@ VALID_OPT = ["--reboot", "--apply", "--shell", "--continue", "--no-verify", \
 
 # Required programs / dependecies
 REQUIRED_DEP = ["zypper", "snapper", "btrfs", "echo", "ps", "sed", "awk", "bash", "sort", \
-            "env", "chroot", "mount", "umount", "rmdir", "findmnt", "systemd-nspawn", \
-            "systemctl", "machinectl", "systemd-analyze"]
+            "env", "chroot", "mount", "umount", "rmdir", "findmnt", "systemctl"]
 
 # The exit code of these programs (if it exists) in addition to the required programs
 # will be checked pre/post each transaction/update
@@ -157,14 +156,6 @@ def verify_programs(TMP_MOUNT_DIR):
 # Function to cleanup on SIGINT or successful completion
 def cleanup():
     logging.info("Cleaning up...")
-    logging.debug("Stopping ephemeral systemd-nspawn containers...")
-    out, ret = shell_exec("LC_ALL=C machinectl --quiet --no-pager -o json list")
-    containers = json.loads(out)
-    for container in containers:
-        if ( container["class"] == "container" and container["service"] == "systemd-nspawn" and
-        container["machine"].startswith(f"{TMP_MOUNT_DIR.split('/').pop()}") ):
-            container_id = container["machine"]
-            shell_exec(f"machinectl stop {container_id}")
     logging.debug("Cleaning up temp mounts...")
     umount_command = f"""
 LC_ALL=C mount -l | grep '{TMP_MOUNT_DIR}' | awk '{{print $3}}' | awk '{{print length, $0}}' | sort -rn | awk '{{printf "\\047%s\\047\\n", $2}}' | awk '{{system("umount " $0)}}';

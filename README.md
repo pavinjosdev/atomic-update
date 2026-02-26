@@ -8,9 +8,9 @@ atomic-update uses [btrfs subvolumes](https://btrfs.readthedocs.io/en/latest/Sub
 
 ### How it works
 - On performing an update or running a command using atomic-update, a new root filesystem snapshot is created
-- The new snapshot is used to boot an ephemeral container to see which services are in a failed state, for later comparison
+- The new snapshot is used to check which essential programs are in a failed state, for later comparison
 - All changes are made against this new snapshot and not to the currently running system's snapshot
-- The snapshot is booted again in an ephemeral container to see if the changes broke any new services
+- The snapshot is checked again to see if the changes broke any new programs
 - If the changes are successful, the new snapshot is set as the default snapshot. The changes can be either applied live or the system rebooted into the new default snapshot
 - If the changes are unsuccessful, the new snapshot is discarded
 
@@ -30,12 +30,8 @@ atomic-update is heavily inspired by the excellent [transactional-update](https:
 Even though transactional-update works on read-write systems as of version 4.6.0, it's not officially supported and the lead developer has [stated](https://bugzilla.opensuse.org/show_bug.cgi?id=1221742#c27) support may be removed in the future if there are conflicts with read-only filesystem features.
 
 ## Installation
-1. Install external dependency for booting snapshots in an ephemeral container to check for issues. `systemd-nspawn` is part of systemd and very small 👼
-```
-sudo zypper install systemd-container
-```
+Just a single python script you can read through in a few minutes! 📜
 
-2. Install atomic-update, just a single python script you can read through in a few minutes 📜
 ```
 curl -s https://raw.githubusercontent.com/pavinjosdev/atomic-update/main/atomic-update | sudo tee /usr/bin/atomic-update > /dev/null
 sudo chmod 755 /usr/bin/atomic-update
@@ -128,11 +124,6 @@ sudo atomic-update rollback
 1. Remove atomic-update
 ```
 sudo rm /usr/bin/atomic-update
-```
-
-2. Optionally, uninstall `systemd-nspawn`
-```
-sudo zypper remove systemd-container
 ```
 
 ## Troubleshooting
